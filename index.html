@@ -710,14 +710,21 @@ body.veiled .app,body.veiled .chessapp{filter:blur(16px) saturate(.6)}
         try {
           // адрес известен — сразу к делу (первый же запрос его и проверит); не ответил — ищем заново
           if (ENTRY && (!API || recheck)) { recheck = false; await findApi(); }
-          if (token) { const r = await fetch(API + "/api/me", { headers: H() }); if (r.ok) { me = await r.json(); await fetchAuto(); return resolve(); } }
-          const r = await fetch(API + "/api/device", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pair, dev }) });
+          const T = { signal: AbortSignal.timeout(20000) };
+          if (token) {
+            const r = await fetch(API + "/api/me", { headers: H(), ...T });
+            if (r.ok) { me = await r.json(); await fetchAuto(); return resolve(); }
+            if (r.status !== 401) throw new Error("ответил не сервер");   // туннель тормозит или сменил адрес — пробуем ещё
+          }
+          const r = await fetch(API + "/api/device", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pair, dev }), ...T });
           const j = await r.json().catch(() => ({}));
-          if (r.ok) { token = j.token; try { localStorage.setItem("ferz.token", token); } catch {} me = { uid: j.uid, name: j.name, owner: j.owner }; await fetchAuto(); return resolve(); }
-          offline(j.code === "pair_required" ? "Откройте «Ферзь» через приложение на телефоне или по QR-коду с компьютера."
-            : j.code === "closed" ? "Владелец закрыл подключение новых устройств." : "Слишком много новых устройств с этого адреса. Попробуйте позже.");
-          return;
-        } catch { recheck = true; offline("Сервер «Ферзя» не отвечает. Запустите его ярлыком «Ферзь» на компьютере — страница подключится сама."); await new Promise(r => setTimeout(r, 4000)); }
+          if (r.ok && j.token) { token = j.token; try { localStorage.setItem("ferz.token", token); } catch {} me = { uid: j.uid, name: j.name, owner: j.owner }; await fetchAuto(); return resolve(); }
+          // окончательные отказы самого сервера — показываем и не повторяем
+          if (j.code === "pair_required") { offline("Откройте «Ферзь» через приложение на телефоне или по ссылке от владельца."); return; }
+          if (j.code === "closed") { offline("Владелец закрыл подключение новых устройств."); return; }
+          if (j.code === "rate_limited") { offline("Слишком много новых устройств с этого адреса. Попробую снова через минуту."); await new Promise(res => setTimeout(res, 60000)); continue; }
+          throw new Error("ответил не сервер");   // страница ошибки туннеля и т. п. — ищем сервер заново
+        } catch { recheck = true; offline("Подключаюсь к «Ферзю»… Если долго не получается — проверьте, что компьютер с «Ферзём» включён."); await new Promise(r => setTimeout(r, 4000)); }
       }
     };
     document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", start) : start();
